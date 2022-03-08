@@ -8,7 +8,7 @@
 )]
 #![warn(clippy::pedantic, clippy::cargo, missing_docs)]
 
-use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use actix_cors::Cors;
 use actix_web::{http, middleware, web, App, Error, HttpResponse, HttpServer};
@@ -66,9 +66,12 @@ fn graphql(
 fn main() {
     indexer_core::run(|| {
         let Opts {
-            server: ServerOpts { port },
+            server,
             twitter_bearer_token,
         } = Opts::parse();
+
+        let (addr,) = server.into_parts();
+        info!("Listening on {}", addr);
 
         let twitter_bearer_token = twitter_bearer_token.unwrap_or_else(String::new);
         let twitter_bearer_token = Arc::new(twitter_bearer_token);
@@ -85,9 +88,6 @@ fn main() {
                 percent_encoding::NON_ALPHANUMERIC,
             )
         );
-        let mut addr: SocketAddr = "0.0.0.0:3000".parse().unwrap();
-        addr.set_port(port);
-        info!("Listening on {}", addr);
 
         // Should look something like "/..."
         let graphiql_uri = version_extension.clone();
