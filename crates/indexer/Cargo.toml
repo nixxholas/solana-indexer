@@ -1,6 +1,6 @@
 [package]
 name = "metaplex-indexer"
-version = "0.1.0"
+version = "1.0.0"
 authors = [
   "ryans <ryans@holaplex.com>",
 ]
@@ -69,22 +69,22 @@ rev = "63f26d6b1c393859c1d93c18dc9379827347229b"
 # Workspace dependencies
 [dependencies.indexer-core]
 package = "metaplex-indexer-core"
-version = "=0.1.0"
+version = "=1.0.0"
 path = "../core"
 
 [dependencies.indexer-rabbitmq]
 package = "metaplex-indexer-rabbitmq"
-version = "=0.1.0"
+version = "=1.0.0"
 path = "../rabbitmq"
 
 [target.metaplex-indexer-accountsdb.dependencies.indexer-rabbitmq]
 package = "metaplex-indexer-rabbitmq"
-version = "=0.1.0"
+version = "=1.0.0"
 path = "../rabbitmq"
 features = ["accountsdb", "http-indexer", "producer"]
 
 [target.metaplex-indexer-http.dependencies.indexer-rabbitmq]
 package = "metaplex-indexer-rabbitmq"
-version = "=0.1.0"
+version = "=1.0.0"
 path = "../rabbitmq"
 features = ["http-indexer"]

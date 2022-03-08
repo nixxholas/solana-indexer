@@ -1,6 +1,6 @@
 [package]
 name = "metaplex-indexer-graphql"
-version = "0.1.0"
+version = "1.0.0"
 authors = [
   "Holaplex Engineering <hola@holaplex.com>"
 ]
@@ -27,5 +27,5 @@ thiserror = "1.0.30"
 
 [dependencies.indexer-core]
 package = "metaplex-indexer-core"
-version = "=0.1.0"
+version = "=1.0.0"
 path = "../core"
