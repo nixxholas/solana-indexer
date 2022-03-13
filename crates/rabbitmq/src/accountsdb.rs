@@ -12,7 +12,11 @@ use lapin::{
     BasicProperties, Channel, ExchangeKind,
 };
 use serde::{Deserialize, Serialize};
+use solana_accountsdb_plugin_interface::accountsdb_plugin_interface::{ReplicaBlockInfo, ReplicaTransactionInfo};
+use solana_sdk::clock::UnixTimestamp;
+use solana_transaction_status::{Reward, TransactionStatusMeta};
 pub use solana_sdk::pubkey::Pubkey;
+use solana_sdk::transaction::SanitizedTransaction;
 
 use crate::Result;
 
@@ -39,20 +43,22 @@ pub struct AccountUpdate {
     pub is_startup: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockInfo {
+    pub slot: u64,
+    pub blockhash: String,
+    pub rewards: Vec<Reward>,
+    pub block_time: UnixTimestamp,
+    pub block_height: u64,
+}
+
 /// A message transmitted by an `accountsdb` plugin
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     /// Indicates an account should be updated
     AccountUpdate(AccountUpdate),
-    /// Indicates an instruction was included in a **successful** transaction
-    InstructionNotify {
-        /// The program this instruction was executed with
-        program: Pubkey,
-        /// The binary instruction opcode
-        data: Vec<u8>,
-        /// The account inputs to this instruction
-        accounts: Vec<Pubkey>,
-    },
+    BlockNotify(BlockInfo),
+    TransactionNotify(String)
 }
 
 /// AMQP configuration for `accountsdb` plugins

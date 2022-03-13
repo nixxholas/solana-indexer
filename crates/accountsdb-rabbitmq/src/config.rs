@@ -4,13 +4,16 @@ use serde::Deserialize;
 
 use crate::{
     prelude::*,
-    selectors::{AccountSelector, InstructionSelector},
+    selectors::AccountSelector,
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    amqp: Amqp,
+    accounts_amqp: Amqp,
+    blocks_amqp: Amqp,
+    tx_amqp: Amqp,
+
     jobs: Jobs,
 
     #[serde(default)]
@@ -18,9 +21,6 @@ pub struct Config {
 
     #[serde(default)]
     accounts: Accounts,
-
-    #[serde(default)]
-    instruction_programs: HashSet<String>,
 }
 
 #[serde_with::serde_as]
@@ -69,20 +69,19 @@ impl Config {
         Ok(cfg)
     }
 
-    pub fn into_parts(self) -> Result<(Amqp, Jobs, Metrics, AccountSelector, InstructionSelector)> {
+    pub fn into_parts(self) -> Result<(Amqp, Amqp, Amqp, Jobs, Metrics, AccountSelector)> {
         let Self {
-            amqp,
+            accounts_amqp,
+            blocks_amqp,
+            tx_amqp,
             jobs,
             metrics,
-            accounts,
-            instruction_programs,
+            accounts
         } = self;
 
         let acct =
             AccountSelector::from_config(accounts).context("Failed to create account selector")?;
-        let ins = InstructionSelector::from_config(instruction_programs)
-            .context("Failed to create instruction selector")?;
 
-        Ok((amqp, jobs, metrics, acct, ins))
+        Ok((accounts_amqp, blocks_amqp, tx_amqp, jobs, metrics, acct))
     }
 }

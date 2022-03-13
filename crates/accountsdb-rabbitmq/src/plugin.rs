@@ -6,7 +6,7 @@ use std::{
 };
 
 use indexer_rabbitmq::{
-    accountsdb::{AccountUpdate, Message, Producer, QueueType},
+    accountsdb::{AccountUpdate, BlockInfo, Message, Producer, QueueType},
     lapin::{Connection, ConnectionProperties},
     prelude::*,
 };
@@ -24,6 +24,7 @@ mod ids {
 }
 
 use serde::Deserialize;
+use solana_accountsdb_plugin_interface::accountsdb_plugin_interface::ReplicaBlockInfoVersions;
 
 use crate::{
     config::Config,
@@ -32,7 +33,7 @@ use crate::{
         ReplicaTransactionInfoVersions, Result,
     },
     prelude::*,
-    selectors::{AccountSelector, InstructionSelector},
+    selectors::AccountSelector,
     sender::Sender,
 };
 
@@ -89,9 +90,10 @@ impl Metrics {
 /// An instance of the plugin
 #[derive(Debug, Default)]
 pub struct AccountsDbPluginRabbitMq {
-    producer: Option<Sender<Producer>>,
+    accounts_producer: Option<Sender<Producer>>,
+    blocks_producer: Option<Sender<Producer>>,
+    txs_producer: Option<Sender<Producer>>,
     acct_sel: Option<AccountSelector>,
-    ins_sel: Option<InstructionSelector>,
     metrics: Option<Metrics>,
     token_addresses: HashSet<Pubkey>,
 }
@@ -132,7 +134,8 @@ impl AccountsDbPlugin for AccountsDbPluginRabbitMq {
     fn on_load(&mut self, cfg: &str) -> Result<()> {
         solana_logger::setup_with_default("info");
 
-        let (amqp, jobs, metrics, acct, ins) = Config::read(cfg)
+        let (accounts_amqp, blocks_amqp, tx_amqp, jobs, metrics,
+            acct) = Config::read(cfg)
             .and_then(Config::into_parts)
             .map_err(custom_err)?;
 
@@ -149,7 +152,6 @@ impl AccountsDbPlugin for AccountsDbPluginRabbitMq {
         }
 
         self.acct_sel = Some(acct);
-        self.ins_sel = Some(ins);
 
         self.token_addresses = Self::load_token_reg()?;
 
@@ -161,14 +163,40 @@ impl AccountsDbPlugin for AccountsDbPluginRabbitMq {
         });
 
         smol::block_on(async {
-            let conn =
-                Connection::connect(&amqp.address, ConnectionProperties::default().with_smol())
+            let accounts_mq_conn =
+                Connection::connect(&accounts_amqp.address, ConnectionProperties::default().with_smol())
                     .await
                     .map_err(custom_err)?;
 
-            self.producer = Some(Sender::new(
-                QueueType::new(amqp.network, startup_type, None)
-                    .producer(&conn)
+            self.accounts_producer = Some(Sender::new(
+                QueueType::new(accounts_amqp.network, startup_type, None)
+                    .producer(&accounts_mq_conn)
+                    .await
+                    .map_err(custom_err)?,
+                jobs.limit,
+            ));
+
+            let blocks_mq_conn =
+                Connection::connect(&blocks_amqp.address, ConnectionProperties::default().with_smol())
+                    .await
+                    .map_err(custom_err)?;
+
+            self.blocks_producer = Some(Sender::new(
+                QueueType::new(blocks_amqp.network, startup_type, None)
+                    .producer(&blocks_mq_conn)
+                    .await
+                    .map_err(custom_err)?,
+                jobs.limit,
+            ));
+
+            let txs_mq_conn =
+                Connection::connect(&tx_amqp.address, ConnectionProperties::default().with_smol())
+                    .await
+                    .map_err(custom_err)?;
+
+            self.txs_producer = Some(Sender::new(
+                QueueType::new(tx_amqp.network, startup_type, None)
+                    .producer(&txs_mq_conn)
                     .await
                     .map_err(custom_err)?,
                 jobs.limit,
@@ -234,7 +262,7 @@ impl AccountsDbPlugin for AccountsDbPluginRabbitMq {
                     let owner = Pubkey::new_from_array(owner.try_into().map_err(custom_err)?);
                     let data = data.to_owned();
 
-                    self.producer
+                    self.accounts_producer
                         .as_ref()
                         .ok_or_else(uninit)?
                         .run(move |prod| async move {
@@ -262,82 +290,37 @@ impl AccountsDbPlugin for AccountsDbPluginRabbitMq {
         })
     }
 
-    fn notify_transaction(
+    fn notify_block_metadata(
         &mut self,
-        transaction: ReplicaTransactionInfoVersions,
-        _slot: u64,
+        blockinfo: ReplicaBlockInfoVersions
     ) -> Result<()> {
         fn uninit() -> AccountsDbPluginError {
             AccountsDbPluginError::Custom(anyhow!("RabbitMQ plugin not initialized yet!").into())
         }
 
-        #[inline]
-        async fn process_instruction(
-            ins: &CompiledInstruction,
-            sel: &InstructionSelector,
-            msg: &SanitizedMessage,
-            prod: &Sender<Producer>,
-        ) -> StdResult<(), anyhow::Error> {
-            // TODO: no clue if this is right.
-            let program = *msg
-                .get_account_key(ins.program_id_index as usize)
-                .ok_or_else(|| anyhow!("Couldn't get program ID for instruction"))?;
-
-            // TODO: ...or this.
-            let accounts = ins
-                .accounts
-                .iter()
-                .map(|i| {
-                    msg.get_account_key(*i as usize).map_or_else(
-                        || Err(anyhow!("Couldn't get input account for instruction")),
-                        |k| Ok(*k),
-                    )
-                })
-                .collect::<StdResult<Vec<_>, _>>()?;
-
-            if !sel.is_selected(ins, &program, &accounts) {
-                return Ok(());
-            }
-
-            let data = ins.data.clone();
-
-            prod.run(|prod| async move {
-                prod.write(Message::InstructionNotify {
-                    program,
-                    data,
-                    accounts,
-                })
-                .await
-                .map_err(Into::into)
-            })
-            .await;
-
-            Ok(())
-        }
-
         smol::block_on(async {
-            match transaction {
-                ReplicaTransactionInfoVersions::V0_0_1(tx) => {
-                    let ins_sel = self.ins_sel.as_ref().ok_or_else(uninit)?;
+            match blockinfo {
+                ReplicaBlockInfoVersions::V0_0_1(block) => {
+                    let prod = self.blocks_producer.as_ref().ok_or_else(uninit)?;
 
-                    if matches!(tx.transaction_status_meta.status, Err(..)) {
-                        return Ok(());
-                    }
+                    if let (Some(block_height), Some(block_time))
+                        = (block.block_height, block.block_time) {
+                        let slot = block.slot;
+                        let blockhash = block.blockhash.to_string();
+                        let rewards = block.rewards.to_vec();
 
-                    let prod = self.producer.as_ref().ok_or_else(uninit)?;
-                    let msg = tx.transaction.message();
-
-                    for ins in msg.instructions().iter().chain(
-                        tx.transaction_status_meta
-                            .inner_instructions
-                            .iter()
-                            .flatten()
-                            .flat_map(|i| i.instructions.iter()),
-                    ) {
-                        process_instruction(ins, ins_sel, msg, prod)
-                            .await
-                            .map_err(|e| debug!("Error processing instruction: {:?}", e))
-                            .ok();
+                        prod.run(|prod| async move {
+                            prod.write(Message::BlockNotify(BlockInfo {
+                                slot,
+                                blockhash,
+                                rewards,
+                                block_time,
+                                block_height
+                            }))
+                                .await
+                                .map_err(Into::into)
+                        })
+                            .await;
                     }
                 },
             }

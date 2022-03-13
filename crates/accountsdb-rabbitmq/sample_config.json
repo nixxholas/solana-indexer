@@ -1,5 +1,13 @@
 {
-  "amqp": {
+  "accounts_amqp": {
+    "network": "devnet",
+    "address": "amqp://"
+  },
+  "blocks_amqp": {
+    "network": "devnet",
+    "address": "amqp://"
+  },
+  "tx_amqp": {
     "network": "devnet",
     "address": "amqp://"
   },
